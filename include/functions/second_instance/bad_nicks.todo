@@ -1,0 +1,20 @@
+<?php
+class bad_nicks
+{
+	private static $function;
+	
+	public static function register($name)
+	{
+		global $config;
+		self::$function = $config['functions'][$name];
+		self::$function['name'] = $name;
+		echo "    > '".$name."' - zarejestrowano\n";
+	}
+	
+	public static function execute()
+	{
+		global $ts_query, $ts_data;
+
+		
+	}
+}

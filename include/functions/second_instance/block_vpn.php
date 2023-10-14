@@ -1,0 +1,103 @@
+<?php
+class block_vpn
+{
+	private static $function;
+	private static $too_many_requests;
+	
+	public static function register($name)
+	{
+		global $config;
+		self::$function = $config['functions'][$name];
+		self::$function['name'] = $name;
+		self::$too_many_requests['status'] = false;
+		self::$too_many_requests['time'] = 0;
+		echo "    > '".$name."' - zarejestrowano\n";
+	}
+
+	private static function ban($clid)
+	{
+		global $ts_query;
+		$ts_query->clientPoke($clid, '> VPN Detector v1.0 by futurepower.pl');
+		$ts_query->clientPoke($clid, 'Wykryto zamaskowany adres sieciowy. Proszę wyłączyć VPN lub proxy.');		
+		$ts_query->banClient($clid, 120, 'Wykryto zamaskowany adres sieciowy.');
+	}
+
+	private static function isBadIP($ip)
+	{
+		global $powerBot;
+		$ch = curl_init();
+		curl_setopt_array($ch, [
+			CURLOPT_URL => 'http://check.getipintel.net/check.php?ip='.$ip.'&contact=halskiszymon@gmail.com&format=json&flags=m',
+			CURLOPT_RETURNTRANSFER => true
+		]);
+		try
+		{
+			$response = curl_exec($ch);
+			$code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+			if($code == 200)
+				$response = json_decode($response, true);
+			else if($code == 429)
+			{
+				self::$too_many_requests['status'] = true;
+				self::$too_many_requests['time'] = time();
+				//$powerBot->log('FUNCTION_ERROR  |  '.self::$function['name'].'(create_request): Przekroczono limit w sprawdzaniu adresu sieciowego w serwisie IPHub.info.', $powerBot->getInstance(), true);
+				return 'too_many_requests';
+			}
+			else
+				$powerBot->log('FUNCTION_ERROR  |  '.self::$function['name'].'(create_request): Wystąpił błąd w sprawdzaniu adresu sieciowego. Kod błędu: '.$code.'. Skontaktuj się z twórcą aplikacji.', $powerBot->getInstance(), true);
+		}
+		catch(Exception $e)
+		{
+			$powerBot->log('FUNCTION_ERROR  |  '.self::$function['name'].'(create_request): '.$e.' Skontaktuj się z twórcą aplikacji.', $powerBot->getInstance(), true);
+		}
+		if($response['status'] == 'success' && $response['result'] == 1)
+			return true;
+		return false;
+	}
+	
+	public static function execute()
+	{
+		global $powerBot, $ts_query, $ts_data, $instance;
+
+		if(file_exists('include/cache/'.self::$function['name'].'.json'))
+			$cache = json_decode(file_get_contents('include/cache/'.self::$function['name'].'.json'), true);
+
+		if(!isset($cache['secure_addresses']))
+			$cache['secure_addresses'] = array();
+		if(!isset($cache['unsecure_addresses']))
+			$cache['unsecure_addresses'] = array();
+
+		foreach($ts_data['clients'] as $client)
+		{
+			if(self::$too_many_requests['status'])
+				if(time() - self::$too_many_requests['time'] < 5)
+					break;
+
+			foreach(self::$function['ignored_groups'] as $group)
+				if($powerBot->hasGroup($client['client_servergroups'], $group))
+					continue 2;
+
+			if(in_array($client['connection_client_ip'], array_values($cache['unsecure_addresses']))) { self::ban($client['clid']); continue; }
+
+			if(!in_array($client['connection_client_ip'], array_values($cache['secure_addresses'])))
+			{
+				try
+				{
+					$status = self::isBadIP($client['connection_client_ip']);
+					if($status === true)
+					{
+						$cache['unsecure_addresses'][] = $client['connection_client_ip'];
+						self::ban($client['clid']);
+					}
+					else if($status === false)
+						$cache['secure_addresses'][] = $client['connection_client_ip'];
+				}
+				catch(Exception $e)
+				{
+					$powerBot->log('FUNCTION_ERROR  |  '.self::$function['name'].'(check_ip): '.$e.' Skontaktuj się z twórcą aplikacji.', $powerBot->getInstance(), true);
+				}
+			}
+		}
+		file_put_contents('include/cache/'.self::$function['name'].'.json', json_encode($cache));
+	}
+}
